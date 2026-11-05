@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="My Music">
+<meta name="theme-color" content="#111111">
+<title>My Music</title>
+<style>
+:root{--bg:#fff;--fg:#111;--mut:#777;--acc:#e5484d;--row:#f3f3f3}
+@media (prefers-color-scheme:dark){:root{--bg:#111;--fg:#f2f2f2;--mut:#999;--row:#1e1e1e}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px -apple-system,system-ui,sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+header{display:flex;justify-content:space-between;align-items:center;padding:16px}
+h1{font-size:24px;margin:0}
+label.add{background:var(--acc);color:#fff;padding:10px 16px;border-radius:20px;font-weight:600}
+input[type=file]{display:none}
+#list{padding:0 12px 220px}
+.row{display:flex;align-items:center;gap:8px;background:var(--row);border-radius:10px;padding:12px;margin-bottom:8px}
+.row.on{outline:2px solid var(--acc)}
+.row .t{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row button{background:none;border:0;color:var(--mut);font-size:18px}
+.empty{color:var(--mut);text-align:center;margin-top:60px}
+#bar{position:fixed;left:0;right:0;bottom:0;background:var(--row);padding:12px 16px calc(12px + env(safe-area-inset-bottom))}
+#now{text-align:center;margin-bottom:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#seek{width:100%;accent-color:var(--acc)}
+.times{display:flex;justify-content:space-between;color:var(--mut);font-size:12px}
+.ctl{display:flex;justify-content:center;gap:28px;margin-top:6px}
+.ctl button{background:none;border:0;color:var(--fg);font-size:30px}
+#shuf.on{color:var(--acc)}
+</style></head><body>
+<header><h1>My Music</h1><label class="add">+ Add songs<input id="file" type="file" accept="audio/*" multiple></label></header>
+<div id="list"></div>
+<div id="bar">
+ <div id="now">Nothing playing</div>
+ <input id="seek" type="range" min="0" max="1000" value="0">
+ <div class="times"><span id="cur">0:00</span><span id="dur">0:00</span></div>
+ <div class="ctl"><button id="shuf">⇄</button><button id="prev">⏮</button><button id="play">▶</button><button id="next">⏭</button></div>
+</div>
+<audio id="a"></audio>
+<script>
+const $=id=>document.getElementById(id), a=$('a');
+let db, songs=[], idx=-1, shuffle=false, url=null;
+const req=indexedDB.open('music',1);
+req.onupgradeneeded=()=>req.result.createObjectStore('songs',{keyPath:'id',autoIncrement:true});
+req.onsuccess=()=>{db=req.result;load()};
+function tx(m){return db.transaction('songs',m).objectStore('songs')}
+function load(){tx('readonly').getAll().onsuccess=e=>{songs=e.target.result;render()}}
+$('file').onchange=async e=>{
+  const files=[...e.target.files];
+  await Promise.all(files.map(f=>new Promise(r=>{tx('readwrite').add({name:f.name.replace(/\.[^.]+$/,''),blob:f}).onsuccess=r})));
+  e.target.value='';load();
+};
+function render(){
+  const l=$('list');
+  if(!songs.length){l.innerHTML='<div class="empty">No songs yet.<br>Tap “+ Add songs” to import from your Files app.</div>';return}
+  l.innerHTML='';
+  songs.forEach((s,i)=>{
+    const d=document.createElement('div');d.className='row'+(i===idx?' on':'');
+    const t=document.createElement('div');t.className='t';t.textContent=s.name;t.onclick=()=>playAt(i);
+    const x=document.createElement('button');x.textContent='✕';x.onclick=()=>{if(confirm('Remove "'+s.name+'"?')){tx('readwrite').delete(s.id).onsuccess=()=>{if(i===idx){a.pause();idx=-1}load()}}};
+    d.append(t,x);l.append(d);
+  });
+}
+function playAt(i){
+  if(!songs.length)return;
+  idx=(i+songs.length)%songs.length;
+  if(url)URL.revokeObjectURL(url);
+  url=URL.createObjectURL(songs[idx].blob);
+  a.src=url;a.play();
+  $('now').textContent=songs[idx].name;
+  if('mediaSession' in navigator){navigator.mediaSession.metadata=new MediaMetadata({title:songs[idx].name,artist:'My Music'})}
+  render();
+}
+function next(){playAt(shuffle&&songs.length>1?Math.floor(Math.random()*songs.length):idx+1)}
+function prev(){a.currentTime>3?a.currentTime=0:playAt(idx-1)}
+$('play').onclick=()=>{if(idx<0)playAt(0);else a.paused?a.play():a.pause()};
+$('next').onclick=next;$('prev').onclick=prev;
+$('shuf').onclick=()=>{shuffle=!shuffle;$('shuf').classList.toggle('on',shuffle)};
+a.onplay=()=>$('play').textContent='⏸';a.onpause=()=>$('play').textContent='▶';
+a.onended=next;
+const f=s=>isFinite(s)?Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0'):'0:00';
+a.ontimeupdate=()=>{$('cur').textContent=f(a.currentTime);$('dur').textContent=f(a.duration);if(a.duration)$('seek').value=a.currentTime/a.duration*1000};
+$('seek').oninput=e=>{if(a.duration)a.currentTime=e.target.value/1000*a.duration};
+if('mediaSession' in navigator){
+  navigator.mediaSession.setActionHandler('nexttrack',next);
+  navigator.mediaSession.setActionHandler('previoustrack',prev);
+  navigator.mediaSession.setActionHandler('play',()=>a.play());
+  navigator.mediaSession.setActionHandler('pause',()=>a.pause());
+}
+if('storage' in navigator&&navigator.storage.persist)navigator.storage.persist();
+if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js');
+</script></body></html>
